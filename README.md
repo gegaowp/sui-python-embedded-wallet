@@ -1,22 +1,66 @@
 # Sui Embedded Wallet Python Library
 
-A simple Python library for working with Sui blockchain wallets. This library provides methods for generating new wallet addresses, deriving private keys from mnemonics, and deriving addresses from mnemonics.
+A simple Python library for generating Sui wallet addresses and deriving keys from mnemonics.
+
+## Setup
+
+1.  **Clone the repository (or ensure you have the project files):**
+    ```bash
+    # If using git
+    git clone <your-repo-url>
+    cd sui-embedded-wallet-py
+    # Or just navigate to the directory containing main.py, test_wallet.py, requirements.txt
+    cd /path/to/your/project
+    ```
+
+2.  **Create and Activate a Virtual Environment:**
+    It's highly recommended to use a virtual environment.
+    ```bash
+    # Create the environment
+    python3 -m venv .venv
+
+    # Activate the environment
+    # On macOS/Linux:
+    source .venv/bin/activate
+    # On Windows:
+    # .venv\Scripts\activate
+    ```
+    Your terminal prompt should now start with `(.venv)`.
+
+3.  **Install Dependencies:**
+    ```bash
+    python3 -m pip install -r requirements.txt
+    ```
+
+## Running the Code
+
+Ensure your virtual environment is active (`source .venv/bin/activate`).
+
+1.  **Run the main script:**
+    This script demonstrates generating a new wallet and deriving keys from a specific test mnemonic.
+    ```bash
+    python3 main.py
+    ```
+    You should see output showing the generated details and the verified derived details.
+
+2.  **Run the unit tests:**
+    This verifies the key derivation logic against known values.
+    ```bash
+    python3 -m unittest test_wallet.py
+    ```
+    The tests should pass (`OK`).
+
+## Deactivating the Environment
+
+When you're done, you can deactivate the virtual environment:
+```bash
+deactivate
+```
 
 ## Features
 - Generate new wallet addresses with mnemonics
 - Derive private keys from existing mnemonics
 - Derive addresses from existing mnemonics
-
-## Installation
-
-```bash
-# Create a virtual environment
-python -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
 
 ## Usage
 
@@ -74,16 +118,6 @@ wallet = Suiwallet(mnemonic=mnemonic)
 # Get just the private key
 private_key = wallet.derive_pk_from_mnemonic()
 print(f"Private Key: {private_key}")
-```
-
-## Running Tests
-
-```bash
-# Activate the virtual environment
-source .venv/bin/activate
-
-# Run the tests
-python -m unittest test_wallet.py
 ```
 
 ## Dependencies
