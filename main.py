@@ -6,9 +6,22 @@ Provides functionality for wallet creation, key derivation, and address generati
 """
 
 from pysui.sui.sui_config import SuiConfig
-from pysui.sui.sui_crypto import SignatureScheme, recover_key_and_address
+from pysui.sui.sui_crypto import SignatureScheme, recover_key_and_address, KeyPair
 from pysui.sui.sui_types import SuiAddress
 from typing import Tuple, Optional
+
+# Imports for Transaction Building
+from pysui import SyncClient, handle_result
+from pysui.sui.sui_txn import SyncTransaction
+# Import for manual signing
+from pysui.sui.sui_crypto import recover_key_and_address, SignatureScheme
+# Imports needed for executing signed transaction bytes
+from pysui.sui.sui_builders.exec_builders import ExecuteTransaction
+from pysui.sui.sui_types.scalars import SuiSignature, SuiTxBytes
+from pysui.sui.sui_types.collections import SuiArray
+# Corrected imports for result types
+from pysui.sui.sui_clients.common import SuiRpcResult 
+from pysui.sui.sui_txresults.complex_tx import TxResponse
 
 
 class Suiwallet:
@@ -129,37 +142,163 @@ class Suiwallet:
         )
 
 
+def transfer_sui_example(sender_mnemonic: str,
+                         recipient_address: str, amount: int, 
+                         gas_object_id: str, rpc_url: str = Suiwallet.DEFAULT_RPC_URL):
+    """
+    Demonstrates a simple transfer_sui transaction using a specific mnemonic for signing.
+
+    Args:
+        sender_mnemonic: The mnemonic phrase for the sender address.
+        sender_address: The Sui address of the sender (derived from mnemonic).
+        recipient_address: The Sui address of the recipient.
+        amount: The amount of MIST (1 SUI = 1,000,000,000 MIST) to transfer.
+        gas_object_id: The object ID of the coin to use for gas payment (must be owned by sender_address).
+        rpc_url: The RPC URL to connect to.
+    """
+    print("\n--- Transfer SUI Example (Manual Signing) ---")
+    print(f"Attempting to transfer {amount} MIST to {recipient_address}")
+    print(f"Using gas object: {gas_object_id}")
+    print(f"Signing with mnemonic: {' '.join(sender_mnemonic.split()[:3])}..." ) # Print only first few words
+
+    
+    try:
+        # 1. Initialize client - Use a config that only specifies the RPC URL
+        # We don't need active_address or prv_keys here as we sign manually
+        cfg = SuiConfig.user_config(rpc_url=rpc_url)
+        # Clear out any loaded private keys or active address, as we are using the provided mnemonic
+        cfg._active_address = None
+        cfg._private_keys = []
+        client = SyncClient(cfg)
+
+        _, keypair, derived_addr_str = recover_key_and_address(
+            SignatureScheme.SECP256K1,  # keytype
+            str(sender_mnemonic),
+            Suiwallet.DEFAULT_DERIVATION_PATH
+        )
+        print(f"Successfully recovered keypair for sender address.")
+
+        # 3. Build the transaction
+        txn = SyncTransaction(client=client, initial_sender=derived_addr_str)
+        txn.transfer_sui(
+            recipient=SuiAddress(recipient_address),
+            from_coin=gas_object_id, # This coin pays for the transfer amount AND gas
+            amount=amount
+        )
+
+        # 4. Get transaction bytes for signing (using deferred_execution)
+        # This prepares the transaction data without signing it yet
+        tx_bytes_b64 = txn.deferred_execution(gas_budget="10000000") # Budget in MIST
+        print(f"Transaction bytes generated for signing.")
+
+        # 5. Sign the transaction bytes
+        # The keypair's method handles the intent wrapping and signing internally
+        signature_b64 = keypair.new_sign_secure(tx_bytes_b64)
+        print(f"Transaction signed successfully.")
+
+        # 6. Create ExecuteTransaction builder with signed bytes
+        exec_builder = ExecuteTransaction(
+            tx_bytes=SuiTxBytes(tx_bytes_b64), # Cast to correct type
+            signatures=SuiArray([SuiSignature(signature_b64)]), # Cast to correct type array
+            options={"showEffects": True}, # Request effects to see results
+            request_type=client.request_type # Use the client's default request type
+        )
+
+        # 7. Execute the transaction using the builder
+        execute_result = client.execute(builder=exec_builder)
+
+        # 8. Print results
+        # The handle_result might return TxResponse directly on success
+        # Check for success using the attributes of TxResponse
+        if isinstance(execute_result, TxResponse) and execute_result.succeeded:
+            print("Transfer successful!")
+            print(f"Transaction Digest: {execute_result.digest}")
+            # You can access effects via execute_result.effects
+            # print(execute_result.effects.to_json(indent=2)) 
+        elif isinstance(execute_result, SuiRpcResult) and not execute_result.is_ok(): # Handle RPC errors before execution
+             print(f"Transfer failed before execution: {execute_result.result_string}")
+        else: # Handle execution errors or unexpected types
+            error_msg = getattr(execute_result, 'errors', 'Unknown error')
+            if hasattr(execute_result, 'effects') and hasattr(execute_result.effects, 'status'):
+                error_msg = f"Status: {execute_result.effects.status.status}, Error: {execute_result.effects.status.error}"
+            elif hasattr(execute_result, 'result_string'): # Handle potential SuiRpcResult error case if handle_result didn't raise
+                error_msg = execute_result.result_string
+            
+            print(f"Transfer failed: {error_msg}")
+            
+            # Provide suggestions based on common errors if possible (example)
+            error_str = str(error_msg).lower() # Convert to string and lower for easier searching
+            if "gasbalancetoolowtocovergasbudget" in error_str:
+                print("Suggestion: Check the balance of the gas object or reduce the transfer amount/gas budget.")
+            elif "cannotfindobject" in error_str:
+                print("Suggestion: Verify the gas_object_id exists and is owned by the sender.")
+            elif "signature is not valid" in error_str:
+                 print("Suggestion: Verify the mnemonic corresponds to the sender address and the derivation path is correct.")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        import traceback
+        traceback.print_exc() # Print full traceback for debugging
+    finally:
+        print("-" * 30)
+
+
 if __name__ == '__main__':
-    """Example usage of the Suiwallet class."""
-    
-    # 1. Generate a new wallet
-    new_wallet = Suiwallet.generate_new_wallet()
-    print(f"Generated Mnemonic: {new_wallet.mnemonic}")
-    new_address, new_pk = new_wallet.derive_keys_from_mnemonic()
-    print(f"Generated New Sui Address: {new_address}")
-    print(f"Generated New Re-encoded Bech32 Private Key: {new_pk}")
-    print("-" * 30)
+    # Example Transaction using specific mnemonic (Requires network connection)
+    print("\n--- Interactive SUI Transfer ---")
+    user_transfer_mnemonic = input("Please paste the SENDER'S 12 or 24-word mnemonic phrase for the SUI transfer and press Enter:\n").strip()
 
-    known_mnemonic = "border tiger theory iron early girl solid balance host pitch yard naive"
-    wallet_from_mnemonic = Suiwallet(mnemonic=known_mnemonic)
-    
-    address, pk = wallet_from_mnemonic.derive_keys_from_mnemonic()
-    print(f"Mnemonic: {wallet_from_mnemonic.mnemonic}")
-    print(f"Derived Sui Address: {address}")
-    print(f"Derived Re-encoded Bech32 Private Key: {pk}")
-    print("-" * 30)
+    if not user_transfer_mnemonic:
+        print("No mnemonic provided for transfer. Skipping transfer example.")
+    else:
+        try:
+            # Derive sender address AND keypair from the provided mnemonic ONCE
+            _, interactive_sender_keypair, interactive_sender_address = recover_key_and_address(
+                SignatureScheme.SECP256K1,  # keytype
+                str(user_transfer_mnemonic),  # mnemonics
+                Suiwallet.DEFAULT_DERIVATION_PATH # derv_path
+            )
+            
+            if not interactive_sender_address or not interactive_sender_keypair:
+                raise ValueError(f"Could not extract address string and KeyPair from recover_key_and_address return values")
 
-    test_mnemonic = "border tiger theory iron early girl solid balance host pitch yard naive"
-    expected_pk = "suiprivkey1qyavhj8evj29wqhjlfdz2uyf05vu4x5gnclkch35rm0j7hpkqjaqv0tlqrk"
-    expected_address = "0x0c0672024dabb73c864939acb971ac159fa14699cf4f12f9cd938f3c634d59df"
+            print(f"Derived sender address for transfer: {interactive_sender_address}")
 
-    test_wallet = Suiwallet(mnemonic=test_mnemonic)
-    derived_address, derived_pk = test_wallet.derive_keys_from_mnemonic()
+            my_recipient_address = "0x95831b91dc0d4761530daa520274cc7bb1256b579784d7d223814c3f05c45b26" # Example recipient
+            transfer_amount_mist = 1000000  # 1,000,000 MIST = 0.001 SUI
 
-    print(f"Test Mnemonic: {test_mnemonic}")
-    print(f"Expected Address: {expected_address}")
-    print(f"Derived Address:  {derived_address}")
-    print(f"Address Match: {derived_address == expected_address}")
-    print(f"Expected Private Key: {expected_pk}")
-    print(f"Derived Private Key:  {derived_pk}")
-    print(f"Private Key Match: {derived_pk == expected_pk}")
+            # Fetch gas object for the derived sender address
+            temp_config_for_gas_fetch = SuiConfig.user_config(rpc_url=Suiwallet.DEFAULT_RPC_URL)
+            temp_config_for_gas_fetch._active_address = None 
+            temp_config_for_gas_fetch._private_keys = []
+            temp_client = SyncClient(temp_config_for_gas_fetch)
+            
+            print(f"Fetching gas coins for {interactive_sender_address}...")
+            gas_coins_result = temp_client.get_gas(interactive_sender_address)
+            
+            if gas_coins_result.is_ok() and gas_coins_result.result_data and gas_coins_result.result_data.data:
+                my_gas_object_id = gas_coins_result.result_data.data[0].identifier
+                print(f"Using gas object: {my_gas_object_id}")
+                
+                transfer_sui_example(
+                    sender_mnemonic=user_transfer_mnemonic,
+                    recipient_address=my_recipient_address,
+                    amount=transfer_amount_mist,
+                    gas_object_id=my_gas_object_id
+                )
+            else:
+                print(f"Could not fetch gas coins for the address: {interactive_sender_address}")
+                if not gas_coins_result.is_ok():
+                    print(f"Error: {gas_coins_result.result_string}")
+                elif not (gas_coins_result.result_data and gas_coins_result.result_data.data):
+                    print(f"Error: No gas coins found.")
+                print("Please ensure the address derived from your mnemonic owns gas coins on the connected network.")
+                print("Skipping transfer example.")
+
+        except Exception as e:
+            print(f"An error occurred while setting up the transfer: {e}")
+            import traceback
+            traceback.print_exc()
+            print("Skipping transfer example.")
+        finally:
+            print("-" * 30)
