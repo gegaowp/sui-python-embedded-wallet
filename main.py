@@ -32,6 +32,7 @@ class Suiwallet:
     - Creating new wallets with generated mnemonics
     - Deriving private keys from mnemonics
     - Deriving addresses from mnemonics
+    - Transferring SUI to another address
     """
     
     # Default derivation path for Secp256k1 keys in Sui
@@ -140,107 +141,109 @@ class Suiwallet:
             "Failed to derive private key: KeyPair object does not support to_bech32 method. "
             "Please update pysui."
         )
-
-
-def transfer_sui_example(sender_mnemonic: str,
-                         recipient_address: str, amount: int, 
-                         gas_object_id: str, rpc_url: str = Suiwallet.DEFAULT_RPC_URL):
-    """
-    Demonstrates a simple transfer_sui transaction using a specific mnemonic for signing.
-
-    Args:
-        sender_mnemonic: The mnemonic phrase for the sender address.
-        sender_address: The Sui address of the sender (derived from mnemonic).
-        recipient_address: The Sui address of the recipient.
-        amount: The amount of MIST (1 SUI = 1,000,000,000 MIST) to transfer.
-        gas_object_id: The object ID of the coin to use for gas payment (must be owned by sender_address).
-        rpc_url: The RPC URL to connect to.
-    """
-    print("\n--- Transfer SUI Example (Manual Signing) ---")
-    print(f"Attempting to transfer {amount} MIST to {recipient_address}")
-    print(f"Using gas object: {gas_object_id}")
-    print(f"Signing with mnemonic: {' '.join(sender_mnemonic.split()[:3])}..." ) # Print only first few words
-
     
-    try:
-        # 1. Initialize client - Use a config that only specifies the RPC URL
-        # We don't need active_address or prv_keys here as we sign manually
-        cfg = SuiConfig.user_config(rpc_url=rpc_url)
-        # Clear out any loaded private keys or active address, as we are using the provided mnemonic
-        cfg._active_address = None
-        cfg._private_keys = []
-        client = SyncClient(cfg)
+    @classmethod
+    def transfer_sui(cls, sender_mnemonic: str,
+                     recipient_address: str, amount: int, 
+                     gas_object_id: str, rpc_url: str = DEFAULT_RPC_URL):
+        """
+        Performs a SUI transfer transaction using a mnemonic phrase for signing.
 
-        _, keypair, derived_addr_str = recover_key_and_address(
-            SignatureScheme.SECP256K1,  # keytype
-            str(sender_mnemonic),
-            Suiwallet.DEFAULT_DERIVATION_PATH
-        )
-        print(f"Successfully recovered keypair for sender address.")
+        Args:
+            sender_mnemonic: The mnemonic phrase for the sender address.
+            recipient_address: The Sui address of the recipient.
+            amount: The amount of MIST (1 SUI = 1,000,000,000 MIST) to transfer.
+            gas_object_id: The object ID of the coin to use for gas payment (must be owned by sender_address).
+            rpc_url: The RPC URL to connect to.
+        
+        Returns:
+            None - Prints transaction status to console
+        """
+        print("\n--- Transfer SUI Transaction ---")
+        print(f"Attempting to transfer {amount} MIST to {recipient_address}")
+        print(f"Using gas object: {gas_object_id}")
+        print(f"Signing with mnemonic: {' '.join(sender_mnemonic.split()[:3])}..." ) # Print only first few words
 
-        # 3. Build the transaction
-        txn = SyncTransaction(client=client, initial_sender=derived_addr_str)
-        txn.transfer_sui(
-            recipient=SuiAddress(recipient_address),
-            from_coin=gas_object_id, # This coin pays for the transfer amount AND gas
-            amount=amount
-        )
+        
+        try:
+            # 1. Initialize client - Use a config that only specifies the RPC URL
+            # We don't need active_address or prv_keys here as we sign manually
+            cfg = SuiConfig.user_config(rpc_url=rpc_url)
+            # Clear out any loaded private keys or active address, as we are using the provided mnemonic
+            cfg._active_address = None
+            cfg._private_keys = []
+            client = SyncClient(cfg)
 
-        # 4. Get transaction bytes for signing (using deferred_execution)
-        # This prepares the transaction data without signing it yet
-        tx_bytes_b64 = txn.deferred_execution(gas_budget="10000000") # Budget in MIST
-        print(f"Transaction bytes generated for signing.")
+            _, keypair, derived_addr_str = recover_key_and_address(
+                SignatureScheme.SECP256K1,  # keytype
+                str(sender_mnemonic),
+                cls.DEFAULT_DERIVATION_PATH
+            )
+            print(f"Successfully recovered keypair for sender address.")
 
-        # 5. Sign the transaction bytes
-        # The keypair's method handles the intent wrapping and signing internally
-        signature_b64 = keypair.new_sign_secure(tx_bytes_b64)
-        print(f"Transaction signed successfully.")
+            # 3. Build the transaction
+            txn = SyncTransaction(client=client, initial_sender=derived_addr_str)
+            txn.transfer_sui(
+                recipient=SuiAddress(recipient_address),
+                from_coin=gas_object_id, # This coin pays for the transfer amount AND gas
+                amount=amount
+            )
 
-        # 6. Create ExecuteTransaction builder with signed bytes
-        exec_builder = ExecuteTransaction(
-            tx_bytes=SuiTxBytes(tx_bytes_b64), # Cast to correct type
-            signatures=SuiArray([SuiSignature(signature_b64)]), # Cast to correct type array
-            options={"showEffects": True}, # Request effects to see results
-            request_type=client.request_type # Use the client's default request type
-        )
+            # 4. Get transaction bytes for signing (using deferred_execution)
+            # This prepares the transaction data without signing it yet
+            tx_bytes_b64 = txn.deferred_execution(gas_budget="10000000") # Budget in MIST
+            print(f"Transaction bytes generated for signing.")
 
-        # 7. Execute the transaction using the builder
-        execute_result = client.execute(builder=exec_builder)
+            # 5. Sign the transaction bytes
+            # The keypair's method handles the intent wrapping and signing internally
+            signature_b64 = keypair.new_sign_secure(tx_bytes_b64)
+            print(f"Transaction signed successfully.")
 
-        # 8. Print results
-        # The handle_result might return TxResponse directly on success
-        # Check for success using the attributes of TxResponse
-        if isinstance(execute_result, TxResponse) and execute_result.succeeded:
-            print("Transfer successful!")
-            print(f"Transaction Digest: {execute_result.digest}")
-            # You can access effects via execute_result.effects
-            # print(execute_result.effects.to_json(indent=2)) 
-        elif isinstance(execute_result, SuiRpcResult) and not execute_result.is_ok(): # Handle RPC errors before execution
-             print(f"Transfer failed before execution: {execute_result.result_string}")
-        else: # Handle execution errors or unexpected types
-            error_msg = getattr(execute_result, 'errors', 'Unknown error')
-            if hasattr(execute_result, 'effects') and hasattr(execute_result.effects, 'status'):
-                error_msg = f"Status: {execute_result.effects.status.status}, Error: {execute_result.effects.status.error}"
-            elif hasattr(execute_result, 'result_string'): # Handle potential SuiRpcResult error case if handle_result didn't raise
-                error_msg = execute_result.result_string
-            
-            print(f"Transfer failed: {error_msg}")
-            
-            # Provide suggestions based on common errors if possible (example)
-            error_str = str(error_msg).lower() # Convert to string and lower for easier searching
-            if "gasbalancetoolowtocovergasbudget" in error_str:
-                print("Suggestion: Check the balance of the gas object or reduce the transfer amount/gas budget.")
-            elif "cannotfindobject" in error_str:
-                print("Suggestion: Verify the gas_object_id exists and is owned by the sender.")
-            elif "signature is not valid" in error_str:
-                 print("Suggestion: Verify the mnemonic corresponds to the sender address and the derivation path is correct.")
+            # 6. Create ExecuteTransaction builder with signed bytes
+            exec_builder = ExecuteTransaction(
+                tx_bytes=SuiTxBytes(tx_bytes_b64), # Cast to correct type
+                signatures=SuiArray([SuiSignature(signature_b64)]), # Cast to correct type array
+                options={"showEffects": True}, # Request effects to see results
+                request_type=client.request_type # Use the client's default request type
+            )
 
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        import traceback
-        traceback.print_exc() # Print full traceback for debugging
-    finally:
-        print("-" * 30)
+            # 7. Execute the transaction using the builder
+            execute_result = client.execute(builder=exec_builder)
+
+            # 8. Print results
+            # The handle_result might return TxResponse directly on success
+            # Check for success using the attributes of TxResponse
+            if isinstance(execute_result, TxResponse) and execute_result.succeeded:
+                print("Transfer successful!")
+                print(f"Transaction Digest: {execute_result.digest}")
+                # You can access effects via execute_result.effects
+                # print(execute_result.effects.to_json(indent=2)) 
+            elif isinstance(execute_result, SuiRpcResult) and not execute_result.is_ok(): # Handle RPC errors before execution
+                 print(f"Transfer failed before execution: {execute_result.result_string}")
+            else: # Handle execution errors or unexpected types
+                error_msg = getattr(execute_result, 'errors', 'Unknown error')
+                if hasattr(execute_result, 'effects') and hasattr(execute_result.effects, 'status'):
+                    error_msg = f"Status: {execute_result.effects.status.status}, Error: {execute_result.effects.status.error}"
+                elif hasattr(execute_result, 'result_string'): # Handle potential SuiRpcResult error case if handle_result didn't raise
+                    error_msg = execute_result.result_string
+                
+                print(f"Transfer failed: {error_msg}")
+                
+                # Provide suggestions based on common errors if possible (example)
+                error_str = str(error_msg).lower() # Convert to string and lower for easier searching
+                if "gasbalancetoolowtocovergasbudget" in error_str:
+                    print("Suggestion: Check the balance of the gas object or reduce the transfer amount/gas budget.")
+                elif "cannotfindobject" in error_str:
+                    print("Suggestion: Verify the gas_object_id exists and is owned by the sender.")
+                elif "signature is not valid" in error_str:
+                     print("Suggestion: Verify the mnemonic corresponds to the sender address and the derivation path is correct.")
+
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            import traceback
+            traceback.print_exc() # Print full traceback for debugging
+        finally:
+            print("-" * 30)
 
 
 if __name__ == '__main__':
@@ -280,7 +283,7 @@ if __name__ == '__main__':
                 my_gas_object_id = gas_coins_result.result_data.data[0].identifier
                 print(f"Using gas object: {my_gas_object_id}")
                 
-                transfer_sui_example(
+                Suiwallet.transfer_sui(
                     sender_mnemonic=user_transfer_mnemonic,
                     recipient_address=my_recipient_address,
                     amount=transfer_amount_mist,
